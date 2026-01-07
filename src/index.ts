@@ -125,8 +125,6 @@ export interface WebhookMiddlewareConfig {
   storage: WebhookStorage
   /** Logger (optional, defaults to console) */
   logger?: WebhookLogger
-  /** API path prefix to strip (e.g., '/restfulApi') */
-  pathPrefix?: string
   /** 
    * Function to extract app ID from request (for multi-tenant apps)
    * Return undefined/null for single-tenant apps
@@ -224,6 +222,8 @@ function generateName(path: string): string {
 
 /**
  * Get webhook event config from route
+ * @param method HTTP method
+ * @param path Request path (for registry lookup)
  */
 function getWebhookEventConfig(
   method: string,
@@ -233,15 +233,14 @@ function getWebhookEventConfig(
   if (!route?.webhook) return undefined
 
   const webhookConfig = route.webhook
-  const fullPath = route.fullPath
 
   return {
-    eventKey: webhookConfig.eventKey || generateEventKey(fullPath),
-    name: (route as { name?: string }).name || generateName(fullPath),
+    eventKey: webhookConfig.eventKey || generateEventKey(path),
+    name: (route as { name?: string }).name || generateName(path),
     description: (route as { description?: string }).description || '',
-    category: extractCategory(fullPath),
+    category: extractCategory(path),
     method: route.method,
-    path: fullPath,
+    path,
     config: webhookConfig,
   }
 }
@@ -563,7 +562,6 @@ export function webhook(config: WebhookMiddlewareConfig): Middleware {
   const {
     storage,
     logger = DEFAULT_LOGGER,
-    pathPrefix = '',
     timeout = 30000,
     sensitiveFields = DEFAULT_SENSITIVE_FIELDS,
     retry,
@@ -589,14 +587,12 @@ export function webhook(config: WebhookMiddlewareConfig): Middleware {
     // Get app ID (undefined for single-tenant apps)
     const appId = getAppId ? getAppId(req) ?? undefined : undefined
 
-    // Get request path (strip prefix)
+    // Get request path
     const url = new URL(req.url)
-    const pathname = pathPrefix
-      ? url.pathname.replace(new RegExp(`^${pathPrefix}`), '')
-      : url.pathname
+    const path = url.pathname
 
     // Get event config from route registry
-    const eventConfig = getWebhookEventConfig(req.method, pathname)
+    const eventConfig = getWebhookEventConfig(req.method, path)
     if (!eventConfig) return response
 
     try {

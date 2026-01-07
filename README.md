@@ -108,9 +108,6 @@ webhook({
   // Optional: Logger (default: console)
   logger: WebhookLogger,
 
-  // Optional: API path prefix to strip (default: '')
-  pathPrefix: '/api',
-
   // Optional: Custom function to extract app ID from request
   // Default: (req) => req.headers.get('app-id')
   getAppId: (req) => {
