@@ -1,6 +1,6 @@
 {
   "name": "@vafast/webhook",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "description": "Webhook dispatch middleware for Vafast framework - automatically trigger webhooks based on route configuration",
   "type": "module",
   "author": {
@@ -46,7 +46,7 @@
     "@types/node": "^22.0.0",
     "tsup": "^8.5.1",
     "typescript": "^5.4.5",
-    "vafast": ">=0.4.1",
+    "vafast": "^0.4.2",
     "vitest": "^4.0.16"
   },
   "peerDependencies": {
