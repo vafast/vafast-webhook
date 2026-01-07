@@ -181,7 +181,7 @@ describe('@vafast/webhook', () => {
       ])
 
       expect(storage.subscriptions[0].secret).toBe('my-secret')
-      expect(storage.subscriptions[0].customField).toBe('custom-value')
+      expect(storage.subscriptions[0]['customField']).toBe('custom-value')
     })
   })
 
