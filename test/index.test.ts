@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   generateEventKey,
+  generateEventId,
   extractCategory,
   generateName,
   generateSignature,
@@ -55,6 +56,29 @@ describe('@vafast/webhook', () => {
     it('should handle empty path', () => {
       expect(generateEventKey('/')).toBe('unknown')
       expect(generateEventKey('')).toBe('unknown')
+    })
+  })
+
+  describe('generateEventId', () => {
+    it('should generate unique event IDs with evt_ prefix', () => {
+      const id1 = generateEventId()
+      const id2 = generateEventId()
+      
+      expect(id1).toMatch(/^evt_[a-z0-9]+_[a-f0-9]+$/)
+      expect(id2).toMatch(/^evt_[a-z0-9]+_[a-f0-9]+$/)
+      expect(id1).not.toBe(id2)
+    })
+
+    it('should produce consistent format', () => {
+      const id = generateEventId()
+      const parts = id.split('_')
+      
+      expect(parts.length).toBe(3)
+      expect(parts[0]).toBe('evt')
+      // timestamp part (base36)
+      expect(parts[1].length).toBeGreaterThan(0)
+      // random part (16 hex chars = 8 bytes)
+      expect(parts[2].length).toBe(16)
     })
   })
 

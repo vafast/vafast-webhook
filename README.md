@@ -13,6 +13,7 @@ Automatically trigger webhooks based on route configuration. Zero boilerplate - 
 - 📝 **Logged** - Full delivery tracking with customizable storage
 - 🔄 **Retry** - Automatic retry with exponential backoff on failure
 - 🚦 **Concurrency** - Control parallel webhook requests
+- 🆔 **Event ID** - Unique event IDs for idempotency support
 
 ## Installation
 
@@ -186,6 +187,7 @@ webhook({
 
 ```json
 {
+  "eventId": "evt_m4xr7z_1a2b3c4d5e6f7890",
   "appId": "app_123",
   "eventType": "auth",
   "eventKey": "auth.signIn",
@@ -200,12 +202,15 @@ webhook({
 }
 ```
 
+> **Event ID** (`eventId`): Each webhook delivery has a unique event ID. Use this for idempotency - if your endpoint receives the same `eventId` twice, you can safely skip processing.
+
 ## Webhook Headers
 
 | Header | Description |
 |--------|-------------|
 | `Content-Type` | `application/json` |
 | `X-Webhook-Event` | Event key (e.g., `auth.signIn`) |
+| `X-Webhook-Event-Id` | Unique event ID for idempotency (e.g., `evt_m4xr7z_1a2b3c4d5e6f7890`) |
 | `X-Webhook-Timestamp` | ISO timestamp |
 | `X-Webhook-Signature` | HMAC-SHA256 signature (if secret configured) |
 

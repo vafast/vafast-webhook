@@ -13,9 +13,9 @@ import * as crypto from 'crypto'
 // ============================================
 
 /**
- * Webhook configuration in route definition
+ * Webhook configuration options (detailed config)
  */
-export interface WebhookConfig {
+export interface WebhookConfigOptions {
   /** Custom event key (default: auto-generated from path) */
   eventKey?: string
   /** Fields to include in payload (whitelist) */
@@ -27,6 +27,23 @@ export interface WebhookConfig {
   /** Custom transform function for payload */
   transform?: (data: Record<string, unknown>, req: Request) => Record<string, unknown>
 }
+
+/**
+ * Webhook configuration in route definition
+ * 
+ * @example
+ * // Simple enable with defaults
+ * webhook: true
+ * 
+ * @example
+ * // Empty object (same as true)
+ * webhook: {}
+ * 
+ * @example
+ * // With custom options
+ * webhook: { exclude: ['password'], eventKey: 'custom.event' }
+ */
+export type WebhookConfig = true | WebhookConfigOptions
 
 /**
  * Webhook event configuration (resolved from route)
@@ -69,6 +86,8 @@ export interface WebhookSubscription {
  * Webhook log document
  */
 export interface WebhookLog {
+  /** Unique event ID for idempotency (e.g., 'evt_abc123xyz') */
+  eventId: string
   appId?: string  // Optional for single-tenant apps
   webhookId: string
   eventKey: string
@@ -79,6 +98,8 @@ export interface WebhookLog {
   error: string | null
   duration: number
   createdAt: Date
+  /** Retry attempt number (0 = first attempt) */
+  attempt?: number
 }
 
 /**
@@ -128,6 +149,7 @@ export interface RetryConfig {
   /** Max delay in ms (default: 30000) */
   maxDelay?: number
 }
+
 
 /**
  * Webhook middleware configuration
@@ -194,6 +216,16 @@ const DEFAULT_LOGGER: WebhookLogger = {
 // ============================================
 
 /**
+ * Generate unique event ID for idempotency
+ * Format: evt_{timestamp}_{random}
+ */
+function generateEventId(): string {
+  const timestamp = Date.now().toString(36)
+  const random = crypto.randomBytes(8).toString('hex')
+  return `evt_${timestamp}_${random}`
+}
+
+/**
  * Get client IP from request
  */
 function getClientIp(req: Request): string {
@@ -238,6 +270,13 @@ function generateName(path: string): string {
 }
 
 /**
+ * Normalize webhook config (convert true to empty object)
+ */
+function normalizeConfig(config: WebhookConfig): WebhookConfigOptions {
+  return config === true ? {} : config
+}
+
+/**
  * Get webhook event config from route
  * @param method HTTP method
  * @param path Request path (for registry lookup)
@@ -251,7 +290,7 @@ function getWebhookEventConfig(
   const route = getRoute<{ webhook?: WebhookConfig }>(method, path)
   if (!route?.webhook) return undefined
 
-  const webhookConfig = route.webhook
+  const webhookConfig = normalizeConfig(route.webhook)
   // Strip prefix for eventKey generation
   const pathForEvent = pathPrefix
     ? path.replace(new RegExp(`^${pathPrefix}`), '')
@@ -264,7 +303,7 @@ function getWebhookEventConfig(
     category: extractCategory(pathForEvent),
     method: route.method,
     path,
-    config: webhookConfig,
+    config: route.webhook,
   }
 }
 
@@ -276,7 +315,7 @@ function getAllWebhookEvents(pathPrefix = ''): WebhookEventDefinition[] {
   const webhookRoutes = filterRoutes('webhook') as (RouteMeta & { webhook: WebhookConfig })[]
 
   return webhookRoutes.map((route) => {
-    const webhookConfig = route.webhook
+    const webhookConfig = normalizeConfig(route.webhook)
     const fullPath = route.fullPath
     // Strip prefix for eventKey generation
     const pathForEvent = pathPrefix
@@ -322,6 +361,7 @@ function processFields(
   req: Request,
   sensitiveFields: string[]
 ): Record<string, unknown> {
+  const opts = normalizeConfig(config)
   let result: Record<string, unknown> = { ...data }
 
   // 1. Always filter sensitive fields
@@ -330,9 +370,9 @@ function processFields(
   }
 
   // 2. Handle include (whitelist)
-  if (config.include && config.include.length > 0) {
+  if (opts.include && opts.include.length > 0) {
     const newResult: Record<string, unknown> = {}
-    for (const field of config.include) {
+    for (const field of opts.include) {
       if (field in result) {
         newResult[field] = result[field]
       }
@@ -341,15 +381,15 @@ function processFields(
   }
 
   // 3. Handle exclude (blacklist)
-  if (config.exclude && config.exclude.length > 0) {
-    for (const field of config.exclude) {
+  if (opts.exclude && opts.exclude.length > 0) {
+    for (const field of opts.exclude) {
       delete result[field]
     }
   }
 
   // 4. Custom transform
-  if (config.transform) {
-    result = config.transform(result, req)
+  if (opts.transform) {
+    result = opts.transform(result, req)
   }
 
   // 5. Add common fields
@@ -368,8 +408,9 @@ function checkCondition(
   data: Record<string, unknown>,
   config: WebhookConfig
 ): boolean {
-  if (config.condition) {
-    return config.condition(data)
+  const opts = normalizeConfig(config)
+  if (opts.condition) {
+    return opts.condition(data)
   }
   return true
 }
@@ -459,7 +500,10 @@ async function sendWebhook(
 ): Promise<void> {
   const startTime = Date.now()
   const timestamp = new Date().toISOString()
+  const eventId = generateEventId()
+  
   const payload: Record<string, unknown> = {
+    eventId,
     eventType: eventKey.split('.')[0],
     eventKey,
     timestamp,
@@ -471,6 +515,7 @@ async function sendWebhook(
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'X-Webhook-Event': eventKey,
+    'X-Webhook-Event-Id': eventId,
     'X-Webhook-Timestamp': timestamp,
   }
 
@@ -522,6 +567,7 @@ async function sendWebhook(
   // Log result
   try {
     await storage.saveLog({
+      eventId,
       appId,
       webhookId: subscription.id,
       eventKey,
@@ -532,6 +578,7 @@ async function sendWebhook(
       error: errorMsg,
       duration,
       createdAt: new Date(),
+      attempt: attempts,
     })
   } catch (logErr) {
     logger.error('Failed to save webhook log', { error: logErr })
@@ -860,6 +907,7 @@ export {
   getWebhookCategories,
   getWebhookEventsByCategory,
   generateEventKey,
+  generateEventId,
   extractCategory,
   generateName,
   generateSignature,
