@@ -1,0 +1,55 @@
+{
+  "name": "@vafast/webhook",
+  "version": "0.0.1",
+  "description": "Webhook dispatch middleware for Vafast framework - automatically trigger webhooks based on route configuration",
+  "type": "module",
+  "author": {
+    "name": "vafast",
+    "url": "https://github.com/vafastjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vafastjs/vafast-webhook"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "bugs": "https://github.com/vafastjs/vafast-webhook/issues",
+  "homepage": "https://github.com/vafastjs/vafast-webhook",
+  "keywords": [
+    "vafast",
+    "webhook",
+    "middleware",
+    "typescript",
+    "event-driven"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "npx tsx watch example/index.ts",
+    "test": "npx vitest run",
+    "release": "npm run build && npm run test && npx bumpp && npm publish --access=public"
+  },
+  "license": "MIT",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.4.5",
+    "vafast": ">=0.4.1",
+    "vitest": "^4.0.16"
+  },
+  "peerDependencies": {
+    "vafast": ">=0.4.1"
+  }
+}
