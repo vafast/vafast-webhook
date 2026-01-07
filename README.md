@@ -108,6 +108,10 @@ webhook({
   // Optional: Logger (default: console)
   logger: WebhookLogger,
 
+  // Optional: API path prefix to strip when generating eventKey
+  // e.g., '/restfulApi' → '/restfulApi/auth/signIn' becomes 'auth.signIn'
+  pathPrefix: '/restfulApi',
+
   // Optional: Custom function to extract app ID from request
   // Default: (req) => req.headers.get('app-id')
   getAppId: (req) => {
