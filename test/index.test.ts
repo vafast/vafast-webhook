@@ -511,16 +511,16 @@ describe('@vafast/webhook', () => {
     })
 
     describe('getWebhookCategories', () => {
-      it('should return unique categories', () => {
+      it('should return unique categories with names', () => {
         const categories = getWebhookCategories('/restfulApi')
         expect(categories).toHaveLength(2)
-        expect(categories).toContain('auth')
-        expect(categories).toContain('users')
+        expect(categories.map(c => c.category)).toContain('auth')
+        expect(categories.map(c => c.category)).toContain('users')
       })
 
       it('should sort categories alphabetically', () => {
         const categories = getWebhookCategories('/restfulApi')
-        expect(categories).toEqual(['auth', 'users'])
+        expect(categories.map(c => c.category)).toEqual(['auth', 'users'])
       })
     })
 

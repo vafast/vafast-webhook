@@ -66,6 +66,8 @@ export interface WebhookEventDefinition {
   name: string
   description: string
   category: string
+  /** 分类中文名（来自父级路由的 name） */
+  categoryName?: string
   method: string
   path: string
 }
@@ -312,7 +314,7 @@ function getWebhookEventConfig(
  * @param pathPrefix Optional prefix to strip when generating eventKey
  */
 function getAllWebhookEvents(pathPrefix = ''): WebhookEventDefinition[] {
-  const webhookRoutes = filterRoutes('webhook') as (RouteMeta & { webhook: WebhookConfig })[]
+  const webhookRoutes = filterRoutes('webhook') as (RouteMeta & { webhook: WebhookConfig; parentName?: string })[]
 
   return webhookRoutes.map((route) => {
     const webhookConfig = normalizeConfig(route.webhook)
@@ -327,20 +329,37 @@ function getAllWebhookEvents(pathPrefix = ''): WebhookEventDefinition[] {
       name: route.name || generateName(pathForEvent),
       description: route.description || '',
       category: extractCategory(pathForEvent),
+      categoryName: route.parentName, // 使用父级路由的 name 作为分类中文名
       method: route.method,
       path: fullPath,
     }
   })
 }
 
+/** Webhook 分类定义 */
+export interface WebhookCategoryDefinition {
+  category: string
+  name?: string
+}
+
 /**
- * Get all webhook event categories
+ * Get all webhook event categories with names
  * @param pathPrefix Optional prefix to strip when generating eventKey
  */
-function getWebhookCategories(pathPrefix = ''): string[] {
+function getWebhookCategories(pathPrefix = ''): WebhookCategoryDefinition[] {
   const events = getAllWebhookEvents(pathPrefix)
-  const categories = new Set(events.map((e) => e.category))
-  return Array.from(categories).sort()
+  
+  // 按分类聚合，取第一个事件的 categoryName
+  const categoryMap = new Map<string, string | undefined>()
+  for (const event of events) {
+    if (!categoryMap.has(event.category)) {
+      categoryMap.set(event.category, event.categoryName)
+    }
+  }
+  
+  return Array.from(categoryMap.entries())
+    .map(([category, name]) => ({ category, name }))
+    .sort((a, b) => a.category.localeCompare(b.category))
 }
 
 /**
