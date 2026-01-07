@@ -46,7 +46,7 @@ export interface WebhookEventConfig {
  */
 export interface WebhookSubscription {
   id: string
-  appId: string
+  appId?: string  // Optional for single-tenant apps
   eventKey: string
   endpointUrl: string
   secret?: string
@@ -57,7 +57,7 @@ export interface WebhookSubscription {
  * Webhook log document
  */
 export interface WebhookLog {
-  appId: string
+  appId?: string  // Optional for single-tenant apps
   webhookId: string
   eventKey: string
   endpointUrl: string
@@ -73,8 +73,12 @@ export interface WebhookLog {
  * Storage adapter interface
  */
 export interface WebhookStorage {
-  /** Find enabled subscriptions for an event */
-  findSubscriptions(appId: string, eventKey: string): Promise<WebhookSubscription[]>
+  /** 
+   * Find enabled subscriptions for an event
+   * @param appId - App ID (may be undefined for single-tenant apps)
+   * @param eventKey - Event key (e.g., 'auth.signIn')
+   */
+  findSubscriptions(appId: string | undefined, eventKey: string): Promise<WebhookSubscription[]>
   /** Save webhook log */
   saveLog(log: WebhookLog): Promise<void>
 }
@@ -90,6 +94,30 @@ export interface WebhookLogger {
 }
 
 /**
+ * Response data structure (for isSuccess check)
+ */
+export interface ResponseData {
+  success?: boolean
+  code?: number
+  data?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+/**
+ * Retry configuration
+ */
+export interface RetryConfig {
+  /** Number of retry attempts (default: 0, no retry) */
+  count?: number
+  /** Delay between retries in ms (default: 1000) */
+  delay?: number
+  /** Exponential backoff multiplier (default: 2) */
+  backoff?: number
+  /** Max delay in ms (default: 30000) */
+  maxDelay?: number
+}
+
+/**
  * Webhook middleware configuration
  */
 export interface WebhookMiddlewareConfig {
@@ -99,14 +127,30 @@ export interface WebhookMiddlewareConfig {
   logger?: WebhookLogger
   /** API path prefix to strip (e.g., '/restfulApi') */
   pathPrefix?: string
-  /** Header name for app ID (default: 'app-id') */
-  appIdHeader?: string
+  /** 
+   * Function to extract app ID from request (for multi-tenant apps)
+   * Return undefined/null for single-tenant apps
+   * @default undefined (single-tenant mode, no appId required)
+   */
+  getAppId?: (req: Request) => string | null | undefined
+  /** 
+   * Function to check if response is successful (should trigger webhook)
+   * @default (data) => data.success === true && data.code === 20001
+   */
+  isSuccess?: (data: ResponseData) => boolean
+  /**
+   * Function to extract payload data from response
+   * @default (data) => data.data || {}
+   */
+  getData?: (data: ResponseData) => Record<string, unknown>
   /** Timeout for webhook requests in ms (default: 30000) */
   timeout?: number
   /** Fields to always exclude from payload */
   sensitiveFields?: string[]
-  /** Success response code to check (default: 20001) */
-  successCode?: number
+  /** Retry configuration for failed webhooks */
+  retry?: RetryConfig
+  /** Max concurrent webhook requests (default: 10) */
+  concurrency?: number
 }
 
 // ============================================
@@ -268,58 +312,142 @@ function checkCondition(
 // ============================================
 
 /**
- * Send webhook and log result
+ * Sleep utility
  */
-async function sendWebhook(
-  subscription: WebhookSubscription,
-  appId: string,
-  eventKey: string,
-  data: Record<string, unknown>,
-  storage: WebhookStorage,
-  logger: WebhookLogger,
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Semaphore for concurrency control
+ */
+class Semaphore {
+  private permits: number
+  private waiting: (() => void)[] = []
+
+  constructor(permits: number) {
+    this.permits = permits
+  }
+
+  async acquire(): Promise<void> {
+    if (this.permits > 0) {
+      this.permits--
+      return
+    }
+    await new Promise<void>((resolve) => this.waiting.push(resolve))
+  }
+
+  release(): void {
+    const next = this.waiting.shift()
+    if (next) {
+      next()
+    } else {
+      this.permits++
+    }
+  }
+}
+
+/**
+ * Send a single HTTP request to webhook endpoint
+ */
+async function sendRequest(
+  url: string,
+  bodyString: string,
+  headers: Record<string, string>,
   timeout: number
-): Promise<void> {
-  const startTime = Date.now()
-  const payload = {
-    appId,
-    eventType: eventKey.split('.')[0],
-    eventKey,
-    timestamp: new Date().toISOString(),
-    data,
-  }
-
-  const bodyString = JSON.stringify(payload)
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'X-Webhook-Event': eventKey,
-    'X-Webhook-Timestamp': payload.timestamp,
-  }
-
-  // Add signature if secret is configured
-  if (subscription.secret) {
-    headers['X-Webhook-Signature'] = generateSignature(bodyString, subscription.secret)
-  }
-
-  let status: 'success' | 'failed' = 'success'
-  let statusCode: number | null = null
-  let errorMsg: string | null = null
-
+): Promise<{ ok: boolean; statusCode: number | null; error: string | null }> {
   try {
-    const response = await fetch(subscription.endpointUrl, {
+    const response = await fetch(url, {
       method: 'POST',
       headers,
       body: bodyString,
       signal: AbortSignal.timeout(timeout),
     })
-
-    statusCode = response.status
-    if (!response.ok) {
-      status = 'failed'
-      errorMsg = `HTTP ${response.status}`
+    return {
+      ok: response.ok,
+      statusCode: response.status,
+      error: response.ok ? null : `HTTP ${response.status}`,
     }
   } catch (err) {
-    status = 'failed'
-    errorMsg = err instanceof Error ? err.message : String(err)
+    return {
+      ok: false,
+      statusCode: null,
+      error: err instanceof Error ? err.message : String(err),
+    }
+  }
+}
+
+/**
+ * Send webhook with retry support
+ */
+async function sendWebhook(
+  subscription: WebhookSubscription,
+  appId: string | undefined,
+  eventKey: string,
+  data: Record<string, unknown>,
+  storage: WebhookStorage,
+  logger: WebhookLogger,
+  timeout: number,
+  retry?: RetryConfig
+): Promise<void> {
+  const startTime = Date.now()
+  const timestamp = new Date().toISOString()
+  const payload: Record<string, unknown> = {
+    eventType: eventKey.split('.')[0],
+    eventKey,
+    timestamp,
+    data,
+  }
+  if (appId) payload.appId = appId
+
+  const bodyString = JSON.stringify(payload)
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Webhook-Event': eventKey,
+    'X-Webhook-Timestamp': timestamp,
+  }
+
+  if (subscription.secret) {
+    headers['X-Webhook-Signature'] = generateSignature(bodyString, subscription.secret)
+  }
+
+  // Retry config
+  const maxAttempts = (retry?.count ?? 0) + 1
+  const baseDelay = retry?.delay ?? 1000
+  const backoff = retry?.backoff ?? 2
+  const maxDelay = retry?.maxDelay ?? 30000
+
+  let status: 'success' | 'failed' = 'failed'
+  let statusCode: number | null = null
+  let errorMsg: string | null = null
+  let attempts = 0
+
+  // Try with retries
+  for (let i = 0; i < maxAttempts; i++) {
+    attempts = i + 1
+    const result = await sendRequest(subscription.endpointUrl, bodyString, headers, timeout)
+
+    if (result.ok) {
+      status = 'success'
+      statusCode = result.statusCode
+      errorMsg = null
+      break
+    }
+
+    statusCode = result.statusCode
+    errorMsg = result.error
+
+    // Don't wait after last attempt
+    if (i < maxAttempts - 1) {
+      const delay = Math.min(baseDelay * Math.pow(backoff, i), maxDelay)
+      logger.debug('Webhook failed, retrying...', {
+        attempt: attempts,
+        maxAttempts,
+        delay,
+        error: errorMsg,
+      })
+      await sleep(delay)
+    }
   }
 
   const duration = Date.now() - startTime
@@ -347,6 +475,7 @@ async function sendWebhook(
       eventKey,
       endpointUrl: subscription.endpointUrl,
       error: errorMsg,
+      attempts,
       duration,
     })
   } else {
@@ -354,22 +483,34 @@ async function sendWebhook(
       eventKey,
       endpointUrl: subscription.endpointUrl,
       statusCode,
+      attempts,
       duration,
     })
   }
 }
 
 /**
- * Dispatch webhook event to all subscribers
+ * Dispatch options
+ */
+interface DispatchOptions {
+  storage: WebhookStorage
+  logger: WebhookLogger
+  timeout: number
+  retry?: RetryConfig
+  concurrency?: number
+}
+
+/**
+ * Dispatch webhook event to all subscribers with concurrency control
  */
 async function dispatchEvent(
-  appId: string,
+  appId: string | undefined,
   eventKey: string,
   data: Record<string, unknown>,
-  storage: WebhookStorage,
-  logger: WebhookLogger,
-  timeout: number
+  options: DispatchOptions
 ): Promise<void> {
+  const { storage, logger, timeout, retry, concurrency = 10 } = options
+
   try {
     const subscriptions = await storage.findSubscriptions(appId, eventKey)
 
@@ -381,11 +522,18 @@ async function dispatchEvent(
       count: subscriptions.length,
     })
 
-    // Send to all subscribers in parallel
+    // Use semaphore for concurrency control
+    const semaphore = new Semaphore(concurrency)
+    
     await Promise.all(
-      subscriptions.map((sub) =>
-        sendWebhook(sub, appId, eventKey, data, storage, logger, timeout)
-      )
+      subscriptions.map(async (sub) => {
+        await semaphore.acquire()
+        try {
+          await sendWebhook(sub, appId, eventKey, data, storage, logger, timeout, retry)
+        } finally {
+          semaphore.release()
+        }
+      })
     )
   } catch (err) {
     logger.error('Webhook dispatch failed', { error: err })
@@ -416,11 +564,18 @@ export function webhook(config: WebhookMiddlewareConfig): Middleware {
     storage,
     logger = DEFAULT_LOGGER,
     pathPrefix = '',
-    appIdHeader = 'app-id',
     timeout = 30000,
     sensitiveFields = DEFAULT_SENSITIVE_FIELDS,
-    successCode = 20001,
+    retry,
+    concurrency = 10,
+    // Flexible options
+    getAppId = config.getAppId, // undefined = single-tenant mode (no appId)
+    isSuccess = config.isSuccess ?? ((data: ResponseData) => data.success === true && data.code === 20001),
+    getData = (data: ResponseData) => (data.data || {}) as Record<string, unknown>,
   } = config
+
+  // Pre-create dispatch options
+  const dispatchOptions: DispatchOptions = { storage, logger, timeout, retry, concurrency }
 
   return async (req: Request, next: () => Promise<Response>) => {
     const response = await next()
@@ -431,8 +586,8 @@ export function webhook(config: WebhookMiddlewareConfig): Middleware {
     const contentType = response.headers.get('content-type')
     if (!contentType?.includes('application/json')) return response
 
-    const appId = req.headers.get(appIdHeader)
-    if (!appId) return response
+    // Get app ID (undefined for single-tenant apps)
+    const appId = getAppId ? getAppId(req) ?? undefined : undefined
 
     // Get request path (strip prefix)
     const url = new URL(req.url)
@@ -447,16 +602,13 @@ export function webhook(config: WebhookMiddlewareConfig): Middleware {
     try {
       // Clone response to read body
       const clonedResponse = response.clone()
-      const responseData = (await clonedResponse.json()) as {
-        success?: boolean
-        code?: number
-        data?: Record<string, unknown>
-      }
+      const responseData = (await clonedResponse.json()) as ResponseData
 
-      // Only process business-successful responses
-      if (!responseData.success || responseData.code !== successCode) return response
+      // Check if response is successful using custom function
+      if (!isSuccess(responseData)) return response
 
-      const rawData = responseData.data || {}
+      // Extract payload data using custom function
+      const rawData = getData(responseData)
 
       // Check trigger condition
       if (!checkCondition(rawData, eventConfig.config)) return response
@@ -466,11 +618,9 @@ export function webhook(config: WebhookMiddlewareConfig): Middleware {
 
       // Dispatch asynchronously (don't block response)
       setImmediate(() => {
-        dispatchEvent(appId, eventConfig.eventKey, payload, storage, logger, timeout).catch(
-          (err) => {
-            logger.error('Async dispatch failed', { error: err })
-          }
-        )
+        dispatchEvent(appId, eventConfig.eventKey, payload, dispatchOptions).catch((err) => {
+          logger.error('Async dispatch failed', { error: err })
+        })
       })
     } catch {
       // Parse error doesn't affect response
@@ -500,14 +650,16 @@ export function dispatchWebhook(
   storage: WebhookStorage,
   logger: WebhookLogger,
   options: {
-    appId: string
+    appId?: string  // Optional for single-tenant apps
     eventKey: string
     data: Record<string, unknown>
     req: Request
     timeout?: number
+    retry?: RetryConfig
+    concurrency?: number
   }
 ): void {
-  const { appId, eventKey, data, req, timeout = 30000 } = options
+  const { appId, eventKey, data, req, timeout = 30000, retry, concurrency = 10 } = options
 
   const payload = {
     ...data,
@@ -516,11 +668,118 @@ export function dispatchWebhook(
     timestamp: new Date().toISOString(),
   }
 
+  const dispatchOptions: DispatchOptions = { storage, logger, timeout, retry, concurrency }
+
   setImmediate(() => {
-    dispatchEvent(appId, eventKey, payload, storage, logger, timeout).catch((err) => {
+    dispatchEvent(appId, eventKey, payload, dispatchOptions).catch((err) => {
       logger.error('Manual dispatch failed', { error: err })
     })
   })
+}
+
+// ============================================
+// Simple Storage Adapter
+// ============================================
+
+/**
+ * Webhook configuration item
+ */
+export interface WebhookConfigItem {
+  /** Event key pattern (e.g., 'auth.signIn' or 'auth.*' for wildcard) */
+  eventKey: string
+  /** Webhook endpoint URL */
+  url: string
+  /** Any custom fields (secret, appId, name, headers, etc.) */
+  [key: string]: unknown
+}
+
+/**
+ * Extended storage with direct access to data
+ */
+export interface SimpleStorage extends WebhookStorage {
+  /** Direct access to subscriptions array */
+  subscriptions: WebhookSubscription[]
+  /** Direct access to logs array */
+  logs: WebhookLog[]
+  /** Add a subscription dynamically */
+  add: (config: WebhookConfigItem) => string
+  /** Clear all logs */
+  clearLogs: () => void
+}
+
+/**
+ * Define webhooks with a simple configuration (no database needed)
+ * 
+ * @example
+ * ```typescript
+ * const storage = defineWebhooks([
+ *   { eventKey: 'auth.signIn', url: 'https://api.example.com/webhook' },
+ *   { eventKey: 'users.*', url: 'https://crm.example.com/hook', secret: 'xxx' },
+ * ])
+ * 
+ * // Dynamic add
+ * storage.add({ eventKey: 'order.created', url: 'https://...' })
+ * 
+ * // Check logs (for testing)
+ * console.log(storage.logs)
+ * 
+ * server.use(webhook({ storage }))
+ * ```
+ */
+export function defineWebhooks(initialConfigs: WebhookConfigItem[] = []): SimpleStorage {
+  let idCounter = 0
+  
+  const subscriptions: WebhookSubscription[] = initialConfigs.map((c) => {
+    const { eventKey, url, ...rest } = c
+    return {
+      ...rest, // Preserve custom fields
+      id: `ws_${++idCounter}`,
+      eventKey,
+      endpointUrl: url,
+      status: 'enabled' as const,
+    }
+  })
+  
+  const logs: WebhookLog[] = []
+
+  return {
+    subscriptions,
+    logs,
+    
+    add(config) {
+      const { eventKey, url, ...rest } = config
+      const id = `ws_${++idCounter}`
+      subscriptions.push({
+        ...rest, // Preserve custom fields
+        id,
+        eventKey,
+        endpointUrl: url,
+        status: 'enabled',
+      })
+      return id
+    },
+    
+    clearLogs() {
+      logs.length = 0
+    },
+
+    async findSubscriptions(appId, eventKey) {
+      return subscriptions.filter((s) => {
+        if (s.status !== 'enabled') return false
+        // Match event key (support wildcard)
+        const matches = s.eventKey === eventKey || 
+          (s.eventKey.endsWith('.*') && eventKey.startsWith(s.eventKey.slice(0, -2) + '.'))
+        if (!matches) return false
+        // Match appId (if specified)
+        if (appId !== undefined && s.appId !== undefined && s.appId !== appId) return false
+        return true
+      })
+    },
+    
+    async saveLog(log) {
+      logs.push(log)
+    },
+  }
 }
 
 // ============================================

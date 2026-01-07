@@ -11,6 +11,8 @@ Automatically trigger webhooks based on route configuration. Zero boilerplate - 
 - 🔒 **Secure** - HMAC-SHA256 signature support
 - 🎯 **Flexible** - Include/exclude fields, custom transforms, conditions
 - 📝 **Logged** - Full delivery tracking with customizable storage
+- 🔄 **Retry** - Automatic retry with exponential backoff on failure
+- 🚦 **Concurrency** - Control parallel webhook requests
 
 ## Installation
 
@@ -22,37 +24,48 @@ bun add @vafast/webhook
 
 ## Quick Start
 
-### 1. Create a storage adapter
-
-```typescript
-import type { WebhookStorage, WebhookSubscription, WebhookLog } from '@vafast/webhook'
-
-const storage: WebhookStorage = {
-  async findSubscriptions(appId, eventKey) {
-    // Query your database
-    return db.collection('webhooks').find({ appId, eventKey, status: 'enabled' }).toArray()
-  },
-  async saveLog(log) {
-    // Save to your database
-    await db.collection('webhookLogs').insertOne(log)
-  },
-}
-```
-
-### 2. Add middleware to server
+### Option 1: Simple Config (No Database)
 
 ```typescript
 import { Server } from 'vafast'
-import { webhook } from '@vafast/webhook'
+import { webhook, defineWebhooks } from '@vafast/webhook'
+
+// Define webhooks in code
+const storage = defineWebhooks([
+  { eventKey: 'auth.signIn', url: 'https://api.example.com/webhook' },
+  { eventKey: 'auth.signUp', url: 'https://api.example.com/webhook' },
+  { eventKey: 'users.*', url: 'https://crm.example.com/hook', secret: 'my-secret' }, // Wildcard
+])
+
+// Dynamic add (optional)
+storage.add({ eventKey: 'order.created', url: 'https://...' })
+
+// Check logs (for testing)
+console.log(storage.logs)
 
 const server = new Server(routes)
+server.use(webhook({ storage }))
+```
 
-server.use(
-  webhook({
-    storage,
-    pathPrefix: '/api', // Strip API prefix from paths
-  })
-)
+### Option 2: Custom Storage (Database/Redis/etc.)
+
+```typescript
+import type { WebhookStorage } from '@vafast/webhook'
+
+const storage: WebhookStorage = {
+  async findSubscriptions(appId, eventKey) {
+    // Use any data source: MySQL, Redis, API, etc.
+    return db.query('SELECT * FROM webhooks WHERE event_key = ? AND status = "enabled"', [eventKey])
+  },
+  async saveLog(log) {
+    await db.insert('webhook_logs', log)
+  },
+}
+
+server.use(webhook({ 
+  storage,
+  getAppId: (req) => req.headers.get('app-id'), // Optional: for multi-tenant
+}))
 ```
 
 ### 3. Configure routes
@@ -98,8 +111,29 @@ webhook({
   // Optional: API path prefix to strip (default: '')
   pathPrefix: '/api',
 
-  // Optional: Header name for app ID (default: 'app-id')
-  appIdHeader: 'app-id',
+  // Optional: Custom function to extract app ID from request
+  // Default: (req) => req.headers.get('app-id')
+  getAppId: (req) => {
+    // From header
+    return req.headers.get('x-app-id')
+    // Or from JWT
+    // return decodeJwt(req.headers.get('authorization')).appId
+    // Or fixed value (single-tenant)
+    // return 'my-app'
+  },
+
+  // Optional: Custom function to check if response is successful
+  // Default: (data) => data.success === true && data.code === 20001
+  isSuccess: (data) => {
+    // Standard REST API
+    return data.code === 200
+    // Or simple check
+    // return data.ok === true
+  },
+
+  // Optional: Custom function to extract payload data from response
+  // Default: (data) => data.data || {}
+  getData: (data) => data.result || {},
 
   // Optional: Timeout for webhook requests in ms (default: 30000)
   timeout: 30000,
@@ -107,8 +141,16 @@ webhook({
   // Optional: Fields to always exclude (default: password, token, etc.)
   sensitiveFields: ['password', 'token', 'secret'],
 
-  // Optional: Success response code to check (default: 20001)
-  successCode: 20001,
+  // Optional: Retry configuration for failed webhooks
+  retry: {
+    count: 3,      // Number of retry attempts (default: 0)
+    delay: 1000,   // Initial delay in ms (default: 1000)
+    backoff: 2,    // Exponential backoff multiplier (default: 2)
+    maxDelay: 30000, // Max delay in ms (default: 30000)
+  },
+
+  // Optional: Max concurrent webhook requests (default: 10)
+  concurrency: 10,
 })
 ```
 
@@ -242,6 +284,46 @@ const createMemoryStorage = (): WebhookStorage => {
 }
 ```
 
+## Retry & Concurrency
+
+### Retry with Exponential Backoff
+
+Failed webhooks can be automatically retried:
+
+```typescript
+server.use(webhook({
+  storage,
+  retry: {
+    count: 3,        // Try up to 3 more times after initial failure
+    delay: 1000,     // Start with 1 second delay
+    backoff: 2,      // Double delay each retry: 1s → 2s → 4s
+    maxDelay: 30000, // Cap at 30 seconds
+  },
+}))
+```
+
+**Retry timeline example:**
+- Attempt 1: Immediate (fails)
+- Attempt 2: Wait 1s, retry (fails)
+- Attempt 3: Wait 2s, retry (fails)
+- Attempt 4: Wait 4s, retry (succeeds or gives up)
+
+### Concurrency Control
+
+Control how many webhooks are sent in parallel:
+
+```typescript
+server.use(webhook({
+  storage,
+  concurrency: 5,  // Max 5 concurrent requests (default: 10)
+}))
+```
+
+**Use cases:**
+- Prevent overwhelming external services
+- Respect rate limits on third-party APIs
+- Reduce memory usage during high traffic
+
 ## Processing Flow
 
 ```
@@ -257,7 +339,7 @@ Request → Handler → Response
                        ↓
            setImmediate() → Async dispatch (non-blocking)
                        ↓
-           dispatchEvent() → Query subscriptions → Send to endpoints
+           dispatchEvent() → Semaphore(concurrency) → Send with retry
 ```
 
 ## License
