@@ -4,8 +4,8 @@
  * Automatically trigger webhooks based on route configuration.
  * Uses vafast RouteRegistry to query event configurations.
  */
-import type { Middleware } from 'vafast'
-import { getRoute } from 'vafast'
+import type { Middleware, RouteMeta } from 'vafast'
+import { getRoute, filterRoutes } from 'vafast'
 import * as crypto from 'crypto'
 
 // ============================================
@@ -39,6 +39,18 @@ export interface WebhookEventConfig {
   method: string
   path: string
   config: WebhookConfig
+}
+
+/**
+ * Webhook event definition (for API responses, without config)
+ */
+export interface WebhookEventDefinition {
+  eventKey: string
+  name: string
+  description: string
+  category: string
+  method: string
+  path: string
 }
 
 /**
@@ -254,6 +266,51 @@ function getWebhookEventConfig(
     path,
     config: webhookConfig,
   }
+}
+
+/**
+ * Get all webhook events from routes
+ * @param pathPrefix Optional prefix to strip when generating eventKey
+ */
+function getAllWebhookEvents(pathPrefix = ''): WebhookEventDefinition[] {
+  const webhookRoutes = filterRoutes('webhook') as (RouteMeta & { webhook: WebhookConfig })[]
+
+  return webhookRoutes.map((route) => {
+    const webhookConfig = route.webhook
+    const fullPath = route.fullPath
+    // Strip prefix for eventKey generation
+    const pathForEvent = pathPrefix
+      ? fullPath.replace(new RegExp(`^${pathPrefix}`), '')
+      : fullPath
+
+    return {
+      eventKey: webhookConfig.eventKey || generateEventKey(pathForEvent),
+      name: route.name || generateName(pathForEvent),
+      description: route.description || '',
+      category: extractCategory(pathForEvent),
+      method: route.method,
+      path: fullPath,
+    }
+  })
+}
+
+/**
+ * Get all webhook event categories
+ * @param pathPrefix Optional prefix to strip when generating eventKey
+ */
+function getWebhookCategories(pathPrefix = ''): string[] {
+  const events = getAllWebhookEvents(pathPrefix)
+  const categories = new Set(events.map((e) => e.category))
+  return Array.from(categories).sort()
+}
+
+/**
+ * Get webhook events by category
+ * @param category Category name
+ * @param pathPrefix Optional prefix to strip when generating eventKey
+ */
+function getWebhookEventsByCategory(category: string, pathPrefix = ''): WebhookEventDefinition[] {
+  return getAllWebhookEvents(pathPrefix).filter((e) => e.category === category)
 }
 
 /**
@@ -799,6 +856,9 @@ export default webhook
 // Re-export utility functions
 export {
   getWebhookEventConfig,
+  getAllWebhookEvents,
+  getWebhookCategories,
+  getWebhookEventsByCategory,
   generateEventKey,
   extractCategory,
   generateName,

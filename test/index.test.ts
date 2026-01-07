@@ -8,12 +8,21 @@ import {
   DEFAULT_SENSITIVE_FIELDS,
   defineWebhooks,
   dispatchWebhook,
+  getAllWebhookEvents,
+  getWebhookCategories,
+  getWebhookEventsByCategory,
   type WebhookLogger,
 } from '../src/index'
 
 // Mock fetch for testing
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
+
+// Mock vafast filterRoutes for event query tests
+vi.mock('vafast', () => ({
+  getRoute: vi.fn(),
+  filterRoutes: vi.fn(),
+}))
 
 // Mock logger
 const mockLogger: WebhookLogger = {
@@ -396,6 +405,118 @@ describe('@vafast/webhook', () => {
 
       // Concurrency should still be respected
       expect(maxConcurrent).toBeLessThanOrEqual(2)
+    })
+  })
+
+  describe('Event Query Functions', () => {
+    const mockRoutes = [
+      {
+        method: 'POST',
+        path: '/auth/signIn',
+        fullPath: '/restfulApi/auth/signIn',
+        name: '用户登录',
+        description: '用户登录接口',
+        webhook: { exclude: ['jwtToken'] },
+      },
+      {
+        method: 'POST',
+        path: '/auth/signUp',
+        fullPath: '/restfulApi/auth/signUp',
+        name: '用户注册',
+        description: '用户注册接口',
+        webhook: {},
+      },
+      {
+        method: 'PUT',
+        path: '/users/update',
+        fullPath: '/restfulApi/users/update',
+        name: '更新用户',
+        description: '更新用户信息',
+        webhook: { include: ['userId', 'email'] },
+      },
+      {
+        method: 'DELETE',
+        path: '/users/delete',
+        fullPath: '/restfulApi/users/delete',
+        name: '删除用户',
+        webhook: { eventKey: 'users.remove' },
+      },
+    ]
+
+    beforeEach(async () => {
+      const vafast = await import('vafast')
+      vi.mocked(vafast.filterRoutes).mockReturnValue(mockRoutes as any)
+    })
+
+    describe('getAllWebhookEvents', () => {
+      it('should return all webhook events', () => {
+        const events = getAllWebhookEvents()
+        expect(events).toHaveLength(4)
+      })
+
+      it('should generate eventKey from path', () => {
+        const events = getAllWebhookEvents()
+        expect(events[0].eventKey).toBe('restfulApi.auth.signIn')
+        expect(events[1].eventKey).toBe('restfulApi.auth.signUp')
+      })
+
+      it('should strip pathPrefix when generating eventKey', () => {
+        const events = getAllWebhookEvents('/restfulApi')
+        expect(events[0].eventKey).toBe('auth.signIn')
+        expect(events[1].eventKey).toBe('auth.signUp')
+        expect(events[2].eventKey).toBe('users.update')
+      })
+
+      it('should use custom eventKey if provided', () => {
+        const events = getAllWebhookEvents('/restfulApi')
+        // The 4th route has a custom eventKey
+        expect(events[3].eventKey).toBe('users.remove')
+      })
+
+      it('should include route name and description', () => {
+        const events = getAllWebhookEvents()
+        expect(events[0].name).toBe('用户登录')
+        expect(events[0].description).toBe('用户登录接口')
+      })
+
+      it('should extract category from path', () => {
+        const events = getAllWebhookEvents('/restfulApi')
+        expect(events[0].category).toBe('auth')
+        expect(events[2].category).toBe('users')
+      })
+    })
+
+    describe('getWebhookCategories', () => {
+      it('should return unique categories', () => {
+        const categories = getWebhookCategories('/restfulApi')
+        expect(categories).toHaveLength(2)
+        expect(categories).toContain('auth')
+        expect(categories).toContain('users')
+      })
+
+      it('should sort categories alphabetically', () => {
+        const categories = getWebhookCategories('/restfulApi')
+        expect(categories).toEqual(['auth', 'users'])
+      })
+    })
+
+    describe('getWebhookEventsByCategory', () => {
+      it('should return events for specific category', () => {
+        const authEvents = getWebhookEventsByCategory('auth', '/restfulApi')
+        expect(authEvents).toHaveLength(2)
+        expect(authEvents.every(e => e.category === 'auth')).toBe(true)
+      })
+
+      it('should return events for users category', () => {
+        const usersEvents = getWebhookEventsByCategory('users', '/restfulApi')
+        expect(usersEvents).toHaveLength(2)
+        expect(usersEvents.every(e => e.category === 'users')).toBe(true)
+      })
+
+      it('should return empty array for non-existent category', () => {
+        const events = getWebhookEventsByCategory('orders', '/restfulApi')
+        expect(events).toHaveLength(0)
+      })
     })
   })
 })

@@ -233,6 +233,56 @@ const oauthCallback = async (req) => {
 }
 ```
 
+## Query Events API
+
+Query available webhook events from route configurations:
+
+```typescript
+import {
+  getAllWebhookEvents,
+  getWebhookCategories,
+  getWebhookEventsByCategory,
+} from '@vafast/webhook'
+
+// Get all events (pass pathPrefix if your routes use a prefix)
+const events = getAllWebhookEvents('/restfulApi')
+// Returns:
+// [
+//   { eventKey: 'auth.signIn', name: '用户登录', category: 'auth', method: 'POST', path: '/restfulApi/auth/signIn' },
+//   { eventKey: 'users.update', name: '更新用户', category: 'users', method: 'PUT', path: '/restfulApi/users/update' },
+// ]
+
+// Get all categories
+const categories = getWebhookCategories('/restfulApi')
+// Returns: ['auth', 'users']
+
+// Get events by category
+const authEvents = getWebhookEventsByCategory('auth', '/restfulApi')
+// Returns only events with category === 'auth'
+```
+
+**Use case:** Build an admin UI for webhook configuration by exposing these as API endpoints:
+
+```typescript
+const routes = [
+  {
+    method: 'GET',
+    path: '/webhooks/events',
+    handler: () => success(getAllWebhookEvents('/restfulApi')),
+  },
+  {
+    method: 'GET',
+    path: '/webhooks/categories',
+    handler: () => success(getWebhookCategories('/restfulApi')),
+  },
+  {
+    method: 'GET',
+    path: '/webhooks/events/:category',
+    handler: ({ params }) => success(getWebhookEventsByCategory(params.category, '/restfulApi')),
+  },
+]
+```
+
 ## Storage Adapters
 
 ### MongoDB Example
