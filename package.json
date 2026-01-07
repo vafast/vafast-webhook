@@ -5,11 +5,11 @@
   "type": "module",
   "author": {
     "name": "vafast",
-    "url": "https://github.com/vafastjs"
+    "url": "https://github.com/vafast"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/vafastjs/vafast-webhook"
+    "url": "https://github.com/vafast/vafast-webhook"
   },
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -21,8 +21,8 @@
       "default": "./dist/index.js"
     }
   },
-  "bugs": "https://github.com/vafastjs/vafast-webhook/issues",
-  "homepage": "https://github.com/vafastjs/vafast-webhook",
+  "bugs": "https://github.com/vafast/vafast-webhook/issues",
+  "homepage": "https://github.com/vafast/vafast-webhook",
   "keywords": [
     "vafast",
     "webhook",
