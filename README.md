@@ -20,7 +20,7 @@ Automatically trigger webhooks based on route configuration. Zero boilerplate - 
 ```bash
 npm install @vafast/webhook
 # or
-bun add @vafast/webhook
+npm install @vafast/webhook
 ```
 
 ## Quick Start
