@@ -4,7 +4,8 @@
  * Automatically trigger webhooks based on route configuration.
  * Uses vafast RouteRegistry to query event configurations.
  */
-import type { Middleware, RouteMeta } from 'vafast'
+import { defineMiddleware } from 'vafast'
+import type { RouteMeta } from 'vafast'
 import { getRoute, filterRoutes } from 'vafast'
 import * as crypto from 'crypto'
 
@@ -318,7 +319,7 @@ function getAllWebhookEvents(pathPrefix = ''): WebhookEventDefinition[] {
 
   return webhookRoutes.map((route) => {
     const webhookConfig = normalizeConfig(route.webhook)
-    const fullPath = route.fullPath
+    const fullPath = route.path
     // Strip prefix for eventKey generation
     const pathForEvent = pathPrefix
       ? fullPath.replace(new RegExp(`^${pathPrefix}`), '')
@@ -692,7 +693,7 @@ async function dispatchEvent(
  * server.use(webhookMiddleware)
  * ```
  */
-export function webhook(config: WebhookMiddlewareConfig): Middleware {
+export function webhook(config: WebhookMiddlewareConfig) {
   const {
     storage,
     logger = DEFAULT_LOGGER,
@@ -710,7 +711,7 @@ export function webhook(config: WebhookMiddlewareConfig): Middleware {
   // Pre-create dispatch options
   const dispatchOptions: DispatchOptions = { storage, logger, timeout, retry, concurrency }
 
-  return async (req: Request, next: () => Promise<Response>) => {
+  return defineMiddleware(async (req, next) => {
     const response = await next()
 
     // Only process successful JSON responses
@@ -758,7 +759,7 @@ export function webhook(config: WebhookMiddlewareConfig): Middleware {
     }
 
     return response
-  }
+  })
 }
 
 /**
@@ -933,4 +934,3 @@ export {
   getClientIp,
   DEFAULT_SENSITIVE_FIELDS,
 }
-

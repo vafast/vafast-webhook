@@ -480,8 +480,9 @@ describe('@vafast/webhook', () => {
 
       it('should generate eventKey from path', () => {
         const events = getAllWebhookEvents()
-        expect(events[0].eventKey).toBe('restfulApi.auth.signIn')
-        expect(events[1].eventKey).toBe('restfulApi.auth.signUp')
+        // 使用 route.path 生成 eventKey
+        expect(events[0].eventKey).toBe('auth.signIn')
+        expect(events[1].eventKey).toBe('auth.signUp')
       })
 
       it('should strip pathPrefix when generating eventKey', () => {
