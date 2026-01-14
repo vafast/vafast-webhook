@@ -1,6 +1,6 @@
 {
   "name": "@vafast/webhook",
-  "version": "0.0.11",
+  "version": "0.0.12",
   "description": "Webhook dispatch middleware for Vafast framework - automatically trigger webhooks based on route configuration",
   "type": "module",
   "author": {
@@ -11,14 +11,14 @@
     "type": "git",
     "url": "https://github.com/vafast/vafast-webhook"
   },
-  "main": "./dist/index.js",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "default": "./dist/index.js"
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
     }
   },
   "bugs": "https://github.com/vafast/vafast-webhook/issues",
