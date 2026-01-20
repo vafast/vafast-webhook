@@ -354,7 +354,7 @@ function getWebhookEventConfig(
  * @param pathPrefix Optional prefix to strip when generating eventKey
  */
 function getAllWebhookEvents(pathPrefix = ''): WebhookEventDefinition[] {
-  const webhookRoutes = filterRoutes('webhook') as (RouteMeta & { webhook: WebhookConfig; parentName?: string })[]
+  const webhookRoutes = filterRoutes('webhook') as (RouteMeta & { webhook: WebhookConfig; parent?: { path: string; name?: string; description?: string } })[]
 
   return webhookRoutes.map((route) => {
     const webhookConfig = normalizeConfig(route.webhook)
@@ -369,7 +369,7 @@ function getAllWebhookEvents(pathPrefix = ''): WebhookEventDefinition[] {
       name: route.name || generateName(pathForEvent),
       description: route.description || '',
       category: extractCategory(pathForEvent),
-      categoryName: route.parentName, // 使用父级路由的 name 作为分类中文名
+      categoryName: route.parent?.name, // 使用父级路由的 name 作为分类中文名
       method: route.method,
       path: fullPath,
     }
