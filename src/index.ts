@@ -83,6 +83,12 @@ export interface WebhookSubscription {
   endpointUrl: string
   secret?: string
   status: 'enabled' | 'disabled'
+  /** Source service identifier (e.g., 'auth', 'billing', 'ones') */
+  sourceService?: string
+  /** Webhook name (for display) */
+  name?: string
+  /** Webhook type (for categorization) */
+  type?: string
 }
 
 /**
@@ -103,6 +109,8 @@ export interface WebhookLog {
   createdAt: Date
   /** Retry attempt number (0 = first attempt) */
   attempt?: number
+  /** Source service identifier (e.g., 'auth', 'billing', 'ones') */
+  sourceService?: string
 }
 
 /**
@@ -167,6 +175,11 @@ export interface WebhookMiddlewareConfig {
    * e.g., '/restfulApi' → '/restfulApi/auth/signIn' becomes 'auth.signIn'
    */
   pathPrefix?: string
+  /** 
+   * Source service identifier (e.g., 'auth', 'billing', 'ones')
+   * Used for logging and debugging
+   */
+  sourceService?: string
   /** 
    * Function to extract app ID from request (for multi-tenant apps)
    * Return undefined/null for single-tenant apps
@@ -910,6 +923,237 @@ export function defineWebhooks(initialConfigs: WebhookConfigItem[] = []): Simple
     
     async saveLog(log) {
       logs.push(log)
+    },
+  }
+}
+
+// ============================================
+// MongoDB Storage Factory
+// ============================================
+
+/**
+ * MongoDB collection interface (compatible with mongodb driver)
+ */
+export interface MongoCollection {
+  find(filter: Record<string, unknown>): {
+    toArray(): Promise<Array<Record<string, unknown>>>
+  }
+  insertOne(doc: Record<string, unknown>): Promise<unknown>
+}
+
+/**
+ * Collection getter function type
+ */
+export type CollectionGetter = (name: string) => MongoCollection
+
+/**
+ * MongoDB storage options
+ */
+export interface MongoDBStorageOptions {
+  /** Function to get MongoDB collection by name */
+  collection: CollectionGetter
+  /** Source service identifier (e.g., 'auth', 'billing', 'ones') */
+  sourceService: string
+  /** Webhooks collection name (default: 'webhooks') */
+  webhooksCollection?: string
+  /** Webhook logs collection name (default: 'webhookLogs') */
+  logsCollection?: string
+}
+
+/**
+ * Create a MongoDB-based webhook storage adapter
+ * 
+ * @example
+ * ```typescript
+ * import { createWebhookStorage, webhook } from '@vafast/webhook'
+ * import { collection } from '~/utils/webhookDb'
+ * 
+ * const storage = createWebhookStorage({
+ *   collection,
+ *   sourceService: 'auth',
+ * })
+ * 
+ * export const webhookMiddleware = webhook({
+ *   storage,
+ *   pathPrefix: '/restfulApi',
+ * })
+ * ```
+ */
+export function createWebhookStorage(options: MongoDBStorageOptions): WebhookStorage {
+  const {
+    collection,
+    sourceService,
+    webhooksCollection = 'webhooks',
+    logsCollection = 'webhookLogs',
+  } = options
+
+  return {
+    async findSubscriptions(appId: string | undefined, eventKey: string) {
+      const filter: Record<string, unknown> = {
+        eventKey,
+        status: 'enabled',
+        sourceService,  // 按来源服务过滤
+      }
+      if (appId) {
+        filter.appId = appId
+      }
+
+      const docs = await collection(webhooksCollection).find(filter).toArray()
+
+      return docs.map((doc) => ({
+        id: String((doc._id as { toHexString?: () => string })?.toHexString?.() ?? doc._id),
+        appId: doc.appId as string | undefined,
+        eventKey: doc.eventKey as string,
+        endpointUrl: doc.endpointUrl as string,
+        secret: doc.webhookSecret as string | undefined,
+        status: doc.status as 'enabled' | 'disabled',
+        sourceService: doc.sourceService as string | undefined,
+        name: doc.name as string | undefined,
+        type: doc.type as string | undefined,
+      }))
+    },
+
+    async saveLog(log: WebhookLog) {
+      const nowTime = new Date()
+      await collection(logsCollection).insertOne({
+        sourceService,  // 记录来源服务
+        eventId: log.eventId,
+        appId: log.appId,
+        webhookId: log.webhookId,
+        eventKey: log.eventKey,
+        endpointUrl: log.endpointUrl,
+        body: log.payload,
+        status: log.status,
+        statusCode: log.statusCode,
+        error: log.error,
+        duration: log.duration,
+        attempt: log.attempt,
+        createAt: log.createdAt,
+        updateAt: nowTime,
+      })
+    },
+  }
+}
+
+// ============================================
+// HTTP Storage Factory
+// ============================================
+
+/**
+ * HTTP storage options
+ */
+export interface HttpStorageOptions {
+  /** Base URL of the webhook API (e.g., 'http://localhost:9002/onesRestfulApi') */
+  baseUrl: string
+  /** Source service identifier (e.g., 'auth', 'billing', 'log') */
+  sourceService: string
+  /** API Key ID for authentication */
+  apiKeyId: string
+  /** API Key Secret for authentication */
+  apiKeySecret: string
+  /** Request timeout in ms (default: 5000) */
+  timeout?: number
+}
+
+/**
+ * Create an HTTP-based webhook storage adapter
+ * 
+ * Uses ones-server's internal API to query subscriptions and save logs.
+ * This allows services to not directly connect to the webhook database.
+ * 
+ * @example
+ * ```typescript
+ * import { createHttpStorage, webhook } from '@vafast/webhook'
+ * 
+ * const storage = createHttpStorage({
+ *   baseUrl: 'http://localhost:9002/onesRestfulApi',
+ *   sourceService: 'auth',
+ *   apiKeyId: process.env.AUTH_SERVICE_API_KEY_ID,
+ *   apiKeySecret: process.env.AUTH_SERVICE_API_KEY_SECRET,
+ * })
+ * 
+ * export const webhookMiddleware = webhook({
+ *   storage,
+ *   pathPrefix: '/restfulApi',
+ * })
+ * ```
+ */
+export function createHttpStorage(options: HttpStorageOptions): WebhookStorage {
+  const {
+    baseUrl,
+    sourceService,
+    apiKeyId,
+    apiKeySecret,
+    timeout = 5000,
+  } = options
+
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${apiKeyId}:${apiKeySecret}`,
+  }
+
+  return {
+    async findSubscriptions(appId: string | undefined, eventKey: string) {
+      try {
+        const response = await fetch(`${baseUrl}/webhook-internal/findSubscriptions`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ appId, eventKey, sourceService }),
+          signal: AbortSignal.timeout(timeout),
+        })
+
+        if (!response.ok) {
+          console.error(`[Webhook] findSubscriptions failed: ${response.status}`)
+          return []
+        }
+
+        const result = await response.json() as { 
+          success?: boolean
+          code?: number
+          data?: WebhookSubscription[]
+        }
+
+        // 兼容 vafast 标准响应格式
+        if (result.success && result.data) {
+          return result.data
+        }
+
+        // 直接返回数组格式
+        if (Array.isArray(result)) {
+          return result
+        }
+
+        return []
+      } catch (err) {
+        console.error('[Webhook] findSubscriptions error:', err)
+        return []
+      }
+    },
+
+    async saveLog(log: WebhookLog) {
+      try {
+        await fetch(`${baseUrl}/webhook-internal/saveLog`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            sourceService,
+            eventId: log.eventId,
+            appId: log.appId,
+            webhookId: log.webhookId,
+            eventKey: log.eventKey,
+            endpointUrl: log.endpointUrl,
+            body: log.payload,
+            status: log.status,
+            statusCode: log.statusCode,
+            error: log.error,
+            duration: log.duration,
+            attempt: log.attempt,
+          }),
+          signal: AbortSignal.timeout(timeout),
+        })
+      } catch (err) {
+        console.error('[Webhook] saveLog error:', err)
+      }
     },
   }
 }
