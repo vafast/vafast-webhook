@@ -10,7 +10,7 @@ import { getRoute, filterRoutes } from 'vafast'
 import * as crypto from 'crypto'
 
 // ============================================
-// Types
+// 扩展 vafast 核心的 RouteExtensions 接口
 // ============================================
 
 /**
@@ -45,6 +45,32 @@ export interface WebhookConfigOptions {
  * webhook: { exclude: ['password'], eventKey: 'custom.event' }
  */
 export type WebhookConfig = true | WebhookConfigOptions
+
+/**
+ * Webhook 路由扩展类型
+ *
+ * 用于 withContext 的 TExtensions 泛型参数
+ *
+ * @example
+ * ```typescript
+ * import { withContext } from 'vafast'
+ * import { WebhookRouteExtensions } from '@vafast/webhook'
+ *
+ * // 创建支持 webhook 的路由定义器
+ * const defineRoute = withContext<MyContext, WebhookRouteExtensions>()
+ *
+ * defineRoute({
+ *   method: 'POST',
+ *   path: '/create',
+ *   webhook: true,  // TypeScript 严格检查类型
+ *   handler: ...
+ * })
+ * ```
+ */
+export interface WebhookRouteExtensions {
+  /** Webhook 配置：启用后该路由的响应会触发 webhook 事件 */
+  readonly webhook?: WebhookConfig
+}
 
 /**
  * Webhook event configuration (resolved from route)
@@ -362,7 +388,7 @@ export interface WebhookCategoryDefinition {
  */
 function getWebhookCategories(pathPrefix = ''): WebhookCategoryDefinition[] {
   const events = getAllWebhookEvents(pathPrefix)
-  
+
   // 按分类聚合，取第一个事件的 categoryName
   const categoryMap = new Map<string, string | undefined>()
   for (const event of events) {
@@ -370,7 +396,7 @@ function getWebhookCategories(pathPrefix = ''): WebhookCategoryDefinition[] {
       categoryMap.set(event.category, event.categoryName)
     }
   }
-  
+
   return Array.from(categoryMap.entries())
     .map(([category, name]) => ({ category, name }))
     .sort((a, b) => a.category.localeCompare(b.category))
@@ -534,7 +560,7 @@ async function sendWebhook(
   const startTime = Date.now()
   const timestamp = new Date().toISOString()
   const eventId = generateEventId()
-  
+
   const payload: Record<string, unknown> = {
     eventId,
     eventType: eventKey.split('.')[0],
@@ -671,7 +697,7 @@ async function dispatchEvent(
 
     // Use semaphore for concurrency control
     const semaphore = new Semaphore(concurrency)
-    
+
     await Promise.all(
       subscriptions.map(async (sub) => {
         await semaphore.acquire()
@@ -873,7 +899,7 @@ export interface SimpleStorage extends WebhookStorage {
  */
 export function defineWebhooks(initialConfigs: WebhookConfigItem[] = []): SimpleStorage {
   let idCounter = 0
-  
+
   const subscriptions: WebhookSubscription[] = initialConfigs.map((c) => {
     const { eventKey, url, ...rest } = c
     return {
@@ -884,13 +910,13 @@ export function defineWebhooks(initialConfigs: WebhookConfigItem[] = []): Simple
       status: 'enabled' as const,
     }
   })
-  
+
   const logs: WebhookLog[] = []
 
   return {
     subscriptions,
     logs,
-    
+
     add(config) {
       const { eventKey, url, ...rest } = config
       const id = `ws_${++idCounter}`
@@ -903,7 +929,7 @@ export function defineWebhooks(initialConfigs: WebhookConfigItem[] = []): Simple
       })
       return id
     },
-    
+
     clearLogs() {
       logs.length = 0
     },
@@ -912,7 +938,7 @@ export function defineWebhooks(initialConfigs: WebhookConfigItem[] = []): Simple
       return subscriptions.filter((s) => {
         if (s.status !== 'enabled') return false
         // Match event key (support wildcard)
-        const matches = s.eventKey === eventKey || 
+        const matches = s.eventKey === eventKey ||
           (s.eventKey.endsWith('.*') && eventKey.startsWith(s.eventKey.slice(0, -2) + '.'))
         if (!matches) return false
         // Match appId (if specified)
@@ -920,7 +946,7 @@ export function defineWebhooks(initialConfigs: WebhookConfigItem[] = []): Simple
         return true
       })
     },
-    
+
     async saveLog(log) {
       logs.push(log)
     },
@@ -1058,7 +1084,7 @@ export interface HttpStorageOptions {
 /**
  * Create an HTTP-based webhook storage adapter
  * 
- * Uses ones-server's internal API to query subscriptions and save logs.
+ * Uses webhook-server's internal API to query subscriptions and save logs.
  * This allows services to not directly connect to the webhook database.
  * 
  * @example
@@ -1066,7 +1092,7 @@ export interface HttpStorageOptions {
  * import { createHttpStorage, webhook } from '@vafast/webhook'
  * 
  * const storage = createHttpStorage({
- *   baseUrl: 'http://localhost:9002/onesRestfulApi',
+ *   baseUrl: 'http://localhost:9006/webhookRestfulApi',
  *   sourceService: 'auth',
  *   apiKeyId: process.env.AUTH_SERVICE_API_KEY_ID,
  *   apiKeySecret: process.env.AUTH_SERVICE_API_KEY_SECRET,
@@ -1095,7 +1121,7 @@ export function createHttpStorage(options: HttpStorageOptions): WebhookStorage {
   return {
     async findSubscriptions(appId: string | undefined, eventKey: string) {
       try {
-        const response = await fetch(`${baseUrl}/webhook-internal/findSubscriptions`, {
+        const response = await fetch(`${baseUrl}/internal/findSubscriptions`, {
           method: 'POST',
           headers,
           body: JSON.stringify({ appId, eventKey, sourceService }),
@@ -1107,7 +1133,7 @@ export function createHttpStorage(options: HttpStorageOptions): WebhookStorage {
           return []
         }
 
-        const result = await response.json() as { 
+        const result = await response.json() as {
           success?: boolean
           code?: number
           data?: WebhookSubscription[]
@@ -1132,7 +1158,7 @@ export function createHttpStorage(options: HttpStorageOptions): WebhookStorage {
 
     async saveLog(log: WebhookLog) {
       try {
-        await fetch(`${baseUrl}/webhook-internal/saveLog`, {
+        await fetch(`${baseUrl}/internal/saveLog`, {
           method: 'POST',
           headers,
           body: JSON.stringify({
