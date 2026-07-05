@@ -8,6 +8,19 @@ import { defineMiddleware } from 'vafast'
 import type { RouteMeta } from 'vafast'
 import { getRoute, filterRoutes } from 'vafast'
 import * as crypto from 'crypto'
+import {
+  createHttpDispatcher,
+  type WebhookDispatcher,
+} from './dispatcher.js'
+
+export {
+  createHttpDispatcher,
+  type WebhookDeliveryType,
+  type WebhookDispatchInput,
+  type WebhookDispatchResult,
+  type WebhookDispatcher,
+  type WebhookDispatchSubscription,
+} from './dispatcher.js'
 
 // ============================================
 // 扩展 vafast 核心的 RouteExtensions 接口
@@ -108,6 +121,8 @@ export interface WebhookSubscription {
   eventKey: string
   endpointUrl: string
   secret?: string
+  signSecret?: string
+  deliveryType?: 'generic' | 'feishu' | 'dingtalk' | 'wecom' | 'slack'
   status: 'enabled' | 'disabled'
   /** Source service identifier (e.g., 'auth', 'billing', 'ones') */
   sourceService?: string
@@ -194,6 +209,8 @@ export interface RetryConfig {
 export interface WebhookMiddlewareConfig {
   /** Storage adapter for subscriptions and logs */
   storage: WebhookStorage
+  /** Dispatcher adapter for delivery (optional, uses local fetch when omitted) */
+  dispatcher?: WebhookDispatcher
   /** Logger (optional, defaults to console) */
   logger?: WebhookLogger
   /** 
@@ -555,7 +572,8 @@ async function sendWebhook(
   storage: WebhookStorage,
   logger: WebhookLogger,
   timeout: number,
-  retry?: RetryConfig
+  retry?: RetryConfig,
+  dispatcher?: WebhookDispatcher,
 ): Promise<void> {
   const startTime = Date.now()
   const timestamp = new Date().toISOString()
@@ -592,21 +610,41 @@ async function sendWebhook(
   let statusCode: number | null = null
   let errorMsg: string | null = null
   let attempts = 0
+  let logPayload: Record<string, unknown> = payload
 
   // Try with retries
   for (let i = 0; i < maxAttempts; i++) {
     attempts = i + 1
-    const result = await sendRequest(subscription.endpointUrl, bodyString, headers, timeout)
 
-    if (result.ok) {
-      status = 'success'
+    if (dispatcher) {
+      const result = await dispatcher.dispatch({
+        subscription,
+        appId,
+        eventKey,
+        eventId,
+        data,
+      })
+      logPayload = result.payload
+      if (result.success) {
+        status = 'success'
+        statusCode = result.statusCode
+        errorMsg = null
+        break
+      }
       statusCode = result.statusCode
-      errorMsg = null
-      break
+      errorMsg = result.error
     }
-
-    statusCode = result.statusCode
-    errorMsg = result.error
+    else {
+      const result = await sendRequest(subscription.endpointUrl, bodyString, headers, timeout)
+      if (result.ok) {
+        status = 'success'
+        statusCode = result.statusCode
+        errorMsg = null
+        break
+      }
+      statusCode = result.statusCode
+      errorMsg = result.error
+    }
 
     // Don't wait after last attempt
     if (i < maxAttempts - 1) {
@@ -631,7 +669,7 @@ async function sendWebhook(
       webhookId: subscription.id,
       eventKey,
       endpointUrl: subscription.endpointUrl,
-      payload,
+      payload: logPayload,
       status,
       statusCode,
       error: errorMsg,
@@ -667,6 +705,7 @@ async function sendWebhook(
  */
 interface DispatchOptions {
   storage: WebhookStorage
+  dispatcher?: WebhookDispatcher
   logger: WebhookLogger
   timeout: number
   retry?: RetryConfig
@@ -682,7 +721,7 @@ async function dispatchEvent(
   data: Record<string, unknown>,
   options: DispatchOptions
 ): Promise<void> {
-  const { storage, logger, timeout, retry, concurrency = 10 } = options
+  const { storage, dispatcher, logger, timeout, retry, concurrency = 10 } = options
 
   try {
     const subscriptions = await storage.findSubscriptions(appId, eventKey)
@@ -702,7 +741,7 @@ async function dispatchEvent(
       subscriptions.map(async (sub) => {
         await semaphore.acquire()
         try {
-          await sendWebhook(sub, appId, eventKey, data, storage, logger, timeout, retry)
+          await sendWebhook(sub, appId, eventKey, data, storage, logger, timeout, retry, dispatcher)
         } finally {
           semaphore.release()
         }
@@ -735,6 +774,7 @@ async function dispatchEvent(
 export function webhook(config: WebhookMiddlewareConfig) {
   const {
     storage,
+    dispatcher,
     logger = DEFAULT_LOGGER,
     pathPrefix = '',
     timeout = 30000,
@@ -748,7 +788,7 @@ export function webhook(config: WebhookMiddlewareConfig) {
   } = config
 
   // Pre-create dispatch options
-  const dispatchOptions: DispatchOptions = { storage, logger, timeout, retry, concurrency }
+  const dispatchOptions: DispatchOptions = { storage, dispatcher, logger, timeout, retry, concurrency }
 
   return defineMiddleware(async (req, next) => {
     const response = await next()
@@ -828,9 +868,10 @@ export function dispatchWebhook(
     timeout?: number
     retry?: RetryConfig
     concurrency?: number
+    dispatcher?: WebhookDispatcher
   }
 ): void {
-  const { appId, eventKey, data, req, timeout = 30000, retry, concurrency = 10 } = options
+  const { appId, eventKey, data, req, timeout = 30000, retry, concurrency = 10, dispatcher } = options
 
   const payload = {
     ...data,
@@ -839,7 +880,7 @@ export function dispatchWebhook(
     timestamp: new Date().toISOString(),
   }
 
-  const dispatchOptions: DispatchOptions = { storage, logger, timeout, retry, concurrency }
+  const dispatchOptions: DispatchOptions = { storage, dispatcher, logger, timeout, retry, concurrency }
 
   setImmediate(() => {
     dispatchEvent(appId, eventKey, payload, dispatchOptions).catch((err) => {
