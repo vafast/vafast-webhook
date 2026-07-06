@@ -70,8 +70,8 @@ export function createHttpDispatcher(options: HttpDispatcherOptions): WebhookDis
               id: subscription.id,
               endpointUrl: subscription.endpointUrl,
               deliveryType,
-              secret: subscription.secret,
-              signSecret: subscription.signSecret,
+              ...(subscription.secret != null ? { secret: subscription.secret } : {}),
+              ...(subscription.signSecret != null ? { signSecret: subscription.signSecret } : {}),
             },
             data,
           }),
@@ -79,10 +79,22 @@ export function createHttpDispatcher(options: HttpDispatcherOptions): WebhookDis
         })
 
         if (!response.ok) {
+          let error = `HTTP ${response.status}`
+          try {
+            const errBody = await response.json() as { message?: string, error?: string }
+            if (errBody.message)
+              error = errBody.message
+            else if (errBody.error)
+              error = errBody.error
+          }
+          catch {
+            // 非 JSON 响应，保留 HTTP 状态描述
+          }
+
           return {
             success: false,
             statusCode: response.status,
-            error: `HTTP ${response.status}`,
+            error,
             payload: data,
           }
         }
