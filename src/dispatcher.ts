@@ -3,10 +3,11 @@
  */
 export type WebhookDeliveryType = 'generic' | 'feishu' | 'dingtalk' | 'wecom' | 'slack'
 
+/** 投递订阅：已知字段 + 运行时透传其余 webhook-server 字段 */
 export interface WebhookDispatchSubscription {
   id: string
-  endpointUrl: string
-  deliveryType?: WebhookDeliveryType
+  endpointUrl?: string
+  deliveryType?: string
   secret?: string
   signSecret?: string
 }
@@ -37,6 +38,30 @@ export interface HttpDispatcherOptions {
   apiKeySecret: string
 }
 
+/** 序列化订阅：透传 webhook-server 字段，跳过 null / 空数组 */
+function serializeDispatchSubscription(subscription: WebhookDispatchSubscription) {
+  const result: Record<string, unknown> = {
+    id: subscription.id,
+    endpointUrl: subscription.endpointUrl ?? '',
+    deliveryType: subscription.deliveryType ?? 'generic',
+  }
+
+  for (const [key, value] of Object.entries(subscription)) {
+    if (key === 'id' || key === 'endpointUrl' || key === 'deliveryType') {
+      continue
+    }
+    if (value == null) {
+      continue
+    }
+    if (Array.isArray(value) && value.length === 0) {
+      continue
+    }
+    result[key] = value
+  }
+
+  return result
+}
+
 /**
  * 创建 HTTP Dispatcher，调用 webhook-server /internal/dispatchEvent 代发
  */
@@ -56,7 +81,6 @@ export function createHttpDispatcher(options: HttpDispatcherOptions): WebhookDis
   return {
     async dispatch(input) {
       const { subscription, appId, eventKey, eventId, data } = input
-      const deliveryType = subscription.deliveryType ?? 'generic'
 
       try {
         const response = await fetch(`${baseUrl}/internal/dispatchEvent`, {
@@ -66,13 +90,7 @@ export function createHttpDispatcher(options: HttpDispatcherOptions): WebhookDis
             appId,
             eventKey,
             eventId,
-            subscription: {
-              id: subscription.id,
-              endpointUrl: subscription.endpointUrl,
-              deliveryType,
-              ...(subscription.secret != null ? { secret: subscription.secret } : {}),
-              ...(subscription.signSecret != null ? { signSecret: subscription.signSecret } : {}),
-            },
+            subscription: serializeDispatchSubscription(subscription),
             data,
           }),
           signal: AbortSignal.timeout(timeout),

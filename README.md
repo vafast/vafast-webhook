@@ -325,7 +325,9 @@ server.use(webhook({
 - `POST /internal/saveLog` — persist delivery logs
 
 **`createHttpDispatcher`** calls:
-- `POST /internal/dispatchEvent` — deliver to HTTP / Feishu / DingTalk targets (configured per subscription)
+- `POST /internal/dispatchEvent` — deliver to configured targets (HTTP / IM bots / email, per subscription)
+
+`serializeDispatchSubscription()` forwards all non-null subscription fields to webhook-server; the library does not enumerate business delivery types.
 
 ### Response helpers (v0.1.3+)
 
@@ -445,6 +447,13 @@ Request → Handler → Response
                        ↓
            dispatchEvent() → Semaphore(concurrency) → Send with retry
 ```
+
+## Changelog
+
+### v0.1.7
+
+- `createHttpDispatcher`: pass through subscription fields via `serializeDispatchSubscription()` (e.g. `notifyEmails` for email delivery on webhook-server)
+- Fix `WebhookDispatchSubscription` assignability with `WebhookSubscription` (no index signature on dispatch types)
 
 ## License
 

@@ -122,7 +122,7 @@ export interface WebhookSubscription {
   endpointUrl: string
   secret?: string
   signSecret?: string
-  deliveryType?: 'generic' | 'feishu' | 'dingtalk' | 'wecom' | 'slack'
+  deliveryType?: 'generic' | 'feishu' | 'dingtalk' | 'wecom' | 'slack' | string
   status: 'enabled' | 'disabled'
   /** Source service identifier (e.g., 'auth', 'billing', 'ones') */
   sourceService?: string
