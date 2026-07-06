@@ -6,6 +6,8 @@ import {
   generateName,
   generateSignature,
   getClientIp,
+  getWebhookResponseData,
+  isWebhookResponseSuccess,
   DEFAULT_SENSITIVE_FIELDS,
   defineWebhooks,
   dispatchWebhook,
@@ -79,6 +81,27 @@ describe('@vafast/webhook', () => {
       expect(parts[1].length).toBeGreaterThan(0)
       // random part (16 hex chars = 8 bytes)
       expect(parts[2].length).toBe(16)
+    })
+  })
+
+  describe('response helpers', () => {
+    it('isWebhookResponseSuccess accepts vafast direct JSON object', () => {
+      expect(isWebhookResponseSuccess({ userId: 'u1', email: 'a@b.com' })).toBe(true)
+    })
+
+    it('isWebhookResponseSuccess rejects non-object body', () => {
+      expect(isWebhookResponseSuccess(null as unknown as Record<string, unknown>)).toBe(false)
+      expect(isWebhookResponseSuccess(['x'] as unknown as Record<string, unknown>)).toBe(false)
+    })
+
+    it('getWebhookResponseData returns whole handler object', () => {
+      const payload = { userId: 'u1', role: 'admin' }
+      expect(getWebhookResponseData(payload)).toEqual(payload)
+    })
+
+    it('getWebhookResponseData does not unwrap legacy envelope', () => {
+      const envelope = { success: true, code: 20001, data: { userId: 'u1' } }
+      expect(getWebhookResponseData(envelope)).toEqual(envelope)
     })
   })
 

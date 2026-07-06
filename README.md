@@ -125,14 +125,12 @@ webhook({
   },
 
   // Optional: Custom function to check if response is successful
-  // Default: isWebhookResponseSuccess — supports both wrapped ({ success, code: 20001 })
-  // and direct business-object responses (e.g. { id, title, ... })
-  isSuccess: (data) => data.code === 200,
+  // Default: isWebhookResponseSuccess — HTTP 2xx already filtered; accepts JSON object body
+  isSuccess: (data) => typeof data.id === 'string',
 
   // Optional: Custom function to extract payload data from response
-  // Default: getWebhookResponseData — uses data.data for wrapped responses,
-  // or the whole object for direct business-object responses
-  getData: (data) => data.result || {},
+  // Default: getWebhookResponseData — whole handler JSON object
+  getData: (data) => data,
 
   // Optional: Timeout for webhook requests in ms (default: 30000)
   timeout: 30000,
@@ -333,8 +331,8 @@ server.use(webhook({
 
 | Export | Purpose |
 |--------|---------|
-| `isWebhookResponseSuccess` | Default `isSuccess` — wrapped `{ success, code: 20001 }` **or** direct handler payload |
-| `getWebhookResponseData` | Default `getData` — `data.data` when wrapped, otherwise the full response object |
+| `isWebhookResponseSuccess` | Default `isSuccess` — JSON object body after HTTP 2xx (vafast `mapResponse` direct return) |
+| `getWebhookResponseData` | Default `getData` — entire response JSON object as webhook payload |
 
 Override only when your API uses a non-standard envelope.
 
@@ -449,6 +447,12 @@ Request → Handler → Response
 ```
 
 ## Changelog
+
+### v0.1.8
+
+- Remove `{ success, code: 20001, data }` compatibility — align with vafast handler direct JSON return
+- `createHttpStorage.findSubscriptions` expects array response only (vafast handler direct return)
+- `createHttpDispatcher` parses flat `{ success, statusCode, error, payload }` from internal API
 
 ### v0.1.7
 

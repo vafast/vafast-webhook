@@ -179,44 +179,25 @@ export interface WebhookLogger {
 }
 
 /**
- * Response data structure (for isSuccess check)
+ * Handler JSON 响应体（vafast mapResponse 直出）
  */
-export interface ResponseData {
-  success?: boolean
-  code?: number
-  data?: Record<string, unknown>
-  [key: string]: unknown
-}
+export type ResponseData = Record<string, unknown>
 
 /**
  * 判断 handler 响应是否应触发 webhook
  *
- * 兼容两种 vafast 响应形态：
- * - 包装格式：{ success: true, code: 20001, data: {...} }
- * - 直出格式：handler 返回值经 mapResponse 直接序列化（ones/auth 等服务的默认写法）
+ * 默认与 vafast 一致：HTTP 2xx 已在中间件层过滤，此处仅确认 JSON 体为对象。
+ * 需要自定义成功语义时通过 webhook({ isSuccess }) 覆盖。
  */
 export function isWebhookResponseSuccess(data: ResponseData): boolean {
-  if (data && typeof data === 'object' && data.success === false) {
-    return false
-  }
-  if (data?.success === true && data.code === 20001) {
-    return true
-  }
-  return data !== null && typeof data === 'object'
+  return typeof data === 'object' && data !== null && !Array.isArray(data)
 }
 
 /**
- * 从 handler 响应提取 webhook 载荷
+ * 从 handler 响应提取 webhook 载荷（整段 JSON 业务对象）
  */
 export function getWebhookResponseData(data: ResponseData): Record<string, unknown> {
-  if (data?.success === true && data.code === 20001) {
-    const inner = data.data
-    if (inner && typeof inner === 'object' && !Array.isArray(inner)) {
-      return inner
-    }
-    return inner !== undefined ? { value: inner } : {}
-  }
-  if (data && typeof data === 'object' && !Array.isArray(data)) {
+  if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
     return data
   }
   return {}
@@ -265,12 +246,12 @@ export interface WebhookMiddlewareConfig {
   getAppId?: (req: Request) => string | null | undefined
   /** 
    * Function to check if response is successful (should trigger webhook)
-   * @default (data) => data.success === true && data.code === 20001
+   * @default isWebhookResponseSuccess — HTTP 2xx 已过滤，默认接受 JSON 对象体
    */
   isSuccess?: (data: ResponseData) => boolean
   /**
    * Function to extract payload data from response
-   * @default (data) => data.data || {}
+   * @default getWebhookResponseData — 使用 handler 返回的整段 JSON 对象
    */
   getData?: (data: ResponseData) => Record<string, unknown>
   /** Timeout for webhook requests in ms (default: 30000) */
@@ -1208,23 +1189,14 @@ export function createHttpStorage(options: HttpStorageOptions): WebhookStorage {
           return []
         }
 
-        const result = await response.json() as {
-          success?: boolean
-          code?: number
-          data?: WebhookSubscription[]
+        const result = await response.json()
+
+        if (!Array.isArray(result)) {
+          console.error('[Webhook] findSubscriptions unexpected response shape')
+          return []
         }
 
-        // 兼容 vafast 标准响应格式
-        if (result.success && result.data) {
-          return result.data
-        }
-
-        // 直接返回数组格式
-        if (Array.isArray(result)) {
-          return result
-        }
-
-        return []
+        return result
       } catch (err) {
         console.error('[Webhook] findSubscriptions error:', err)
         return []

@@ -117,24 +117,13 @@ export function createHttpDispatcher(options: HttpDispatcherOptions): WebhookDis
           }
         }
 
-        const result = await response.json() as {
-          success?: boolean
-          data?: {
-            success?: boolean
-            statusCode?: number | null
-            error?: string | null
-            payload?: Record<string, unknown>
-          }
-        } & WebhookDispatchResult
-
-        const payload = result.data?.payload ?? result.payload ?? data
-        const dispatchResult = result.data ?? result
+        const dispatchResult = await response.json() as WebhookDispatchResult
 
         return {
           success: dispatchResult.success === true,
           statusCode: dispatchResult.statusCode ?? null,
           error: dispatchResult.error ?? null,
-          payload,
+          payload: dispatchResult.payload ?? data,
         }
       }
       catch (err) {
