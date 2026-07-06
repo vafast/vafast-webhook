@@ -125,16 +125,13 @@ webhook({
   },
 
   // Optional: Custom function to check if response is successful
-  // Default: (data) => data.success === true && data.code === 20001
-  isSuccess: (data) => {
-    // Standard REST API
-    return data.code === 200
-    // Or simple check
-    // return data.ok === true
-  },
+  // Default: isWebhookResponseSuccess — supports both wrapped ({ success, code: 20001 })
+  // and direct business-object responses (e.g. { id, title, ... })
+  isSuccess: (data) => data.code === 200,
 
   // Optional: Custom function to extract payload data from response
-  // Default: (data) => data.data || {}
+  // Default: getWebhookResponseData — uses data.data for wrapped responses,
+  // or the whole object for direct business-object responses
   getData: (data) => data.result || {},
 
   // Optional: Timeout for webhook requests in ms (default: 30000)
@@ -287,6 +284,57 @@ const routes = [
   },
 ]
 ```
+
+## HTTP Storage & Dispatcher (Microservices)
+
+When webhook subscriptions and delivery live in a dedicated **webhook-server**, use `createHttpStorage` and `createHttpDispatcher`:
+
+```typescript
+import {
+  webhook,
+  createHttpStorage,
+  createHttpDispatcher,
+} from '@vafast/webhook'
+
+const storage = createHttpStorage({
+  baseUrl: 'http://localhost:9006',
+  sourceService: 'ones',       // auth | ones | billing | ai
+  apiKeyId: process.env.API_KEY_ID!,
+  apiKeySecret: process.env.API_KEY_SECRET!,
+})
+
+const dispatcher = createHttpDispatcher({
+  baseUrl: 'http://localhost:9006',
+  apiKeyId: process.env.API_KEY_ID!,
+  apiKeySecret: process.env.API_KEY_SECRET!,
+  timeout: 10000,
+})
+
+server.use(webhook({
+  storage,
+  dispatcher,
+  pathPrefix: '/restfulApi',
+  sourceService: 'ones',
+  getAppId: (req) => req.headers.get('app-id') || undefined,
+  // isSuccess / getData use library defaults — no need to pass explicitly
+}))
+```
+
+**`createHttpStorage`** calls webhook-server internal APIs:
+- `POST /internal/findSubscriptions` — query enabled subscriptions by `appId` + `eventKey`
+- `POST /internal/saveLog` — persist delivery logs
+
+**`createHttpDispatcher`** calls:
+- `POST /internal/dispatchEvent` — deliver to HTTP / Feishu / DingTalk targets (configured per subscription)
+
+### Response helpers (v0.1.3+)
+
+| Export | Purpose |
+|--------|---------|
+| `isWebhookResponseSuccess` | Default `isSuccess` — wrapped `{ success, code: 20001 }` **or** direct handler payload |
+| `getWebhookResponseData` | Default `getData` — `data.data` when wrapped, otherwise the full response object |
+
+Override only when your API uses a non-standard envelope.
 
 ## Storage Adapters
 

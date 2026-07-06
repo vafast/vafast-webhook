@@ -189,6 +189,40 @@ export interface ResponseData {
 }
 
 /**
+ * 判断 handler 响应是否应触发 webhook
+ *
+ * 兼容两种 vafast 响应形态：
+ * - 包装格式：{ success: true, code: 20001, data: {...} }
+ * - 直出格式：handler 返回值经 mapResponse 直接序列化（ones/auth 等服务的默认写法）
+ */
+export function isWebhookResponseSuccess(data: ResponseData): boolean {
+  if (data && typeof data === 'object' && data.success === false) {
+    return false
+  }
+  if (data?.success === true && data.code === 20001) {
+    return true
+  }
+  return data !== null && typeof data === 'object'
+}
+
+/**
+ * 从 handler 响应提取 webhook 载荷
+ */
+export function getWebhookResponseData(data: ResponseData): Record<string, unknown> {
+  if (data?.success === true && data.code === 20001) {
+    const inner = data.data
+    if (inner && typeof inner === 'object' && !Array.isArray(inner)) {
+      return inner
+    }
+    return inner !== undefined ? { value: inner } : {}
+  }
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    return data
+  }
+  return {}
+}
+
+/**
  * Retry configuration
  */
 export interface RetryConfig {
@@ -783,8 +817,8 @@ export function webhook(config: WebhookMiddlewareConfig) {
     concurrency = 10,
     // Flexible options
     getAppId = config.getAppId, // undefined = single-tenant mode (no appId)
-    isSuccess = config.isSuccess ?? ((data: ResponseData) => data.success === true && data.code === 20001),
-    getData = (data: ResponseData) => (data.data || {}) as Record<string, unknown>,
+    isSuccess = config.isSuccess ?? isWebhookResponseSuccess,
+    getData = config.getData ?? getWebhookResponseData,
   } = config
 
   // Pre-create dispatch options
